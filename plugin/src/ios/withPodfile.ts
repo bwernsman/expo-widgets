@@ -1,20 +1,26 @@
-import { mergeContents } from "@expo/config-plugins/build/utils/generateCode"
-import { ExportedConfigWithProps, XcodeProject, } from "expo/config-plugins"
-import * as fs from "fs"
-import * as path from "path"
-import { Logging } from "../utils/logger"
-import { getTargetName } from "./withWidgetXCode"
-import { WithExpoIOSWidgetsProps } from ".."
+import { mergeContents } from '@expo/config-plugins/build/utils/generateCode';
+import { ExportedConfigWithProps, XcodeProject } from '@expo/config-plugins';
+import * as fs from 'fs';
+import * as path from 'path';
+import { WithExpoIOSWidgetsProps } from '..';
+import { Logging } from '../utils/logger';
+import { getTargetName } from './withWidgetXCode';
 
-export const withPodfile = (config: ExportedConfigWithProps<XcodeProject>, options: WithExpoIOSWidgetsProps) => {
-  const targetName = `${getTargetName(config, options)}`
-  const AppExtAPIOnly = options.xcode?.appExtAPI ?? false;
-  const AppExtValue = AppExtAPIOnly ? 'YES' : 'No';
+export const withPodfile = (
+    config: ExportedConfigWithProps<XcodeProject>,
+    options: WithExpoIOSWidgetsProps,
+) => {
+    const targetName = `${getTargetName(config, options)}`;
+    const AppExtAPIOnly = options.xcode?.appExtAPI ?? false;
+    const AppExtValue = AppExtAPIOnly ? 'YES' : 'No';
 
-  const podFilePath = path.join(config.modRequest.platformProjectRoot, "Podfile");
-  let podFileContent = fs.readFileSync(podFilePath).toString();
+    const podFilePath = path.join(
+        config.modRequest.platformProjectRoot,
+        'Podfile',
+    );
+    let podFileContent = fs.readFileSync(podFilePath).toString();
 
-  const podInstaller = `
+    const podInstaller = `
   target '${targetName}' do
   use_expo_modules!
   config = use_native_modules!
@@ -32,43 +38,55 @@ export const withPodfile = (config: ExportedConfigWithProps<XcodeProject>, optio
 end
       `;
 
-  const withAppExtFix = mergeContents({
-    tag: "app_ext_fix",
-    src: podFileContent,
-    newSrc: `
-        config.build_settings['APPLICATION_EXTENSION_API_ONLY'] = '${AppExtValue}'
-        `,
-    anchor: /resource_bundle_target.build_configurations.each do \|config\|/,
-    offset: 1,
-    comment: "#",
-  })
+    const withAppExtFix = mergeContents({
+        tag: 'app_ext_fix',
+        src: podFileContent,
+        newSrc: `    installer.target_installation_results.pod_target_installation_results
+      .each do |pod_name, target_installation_result|
+      target_installation_result.resource_bundle_targets.each do |resource_bundle_target|
+        resource_bundle_target.build_configurations.each do |config|
+          config.build_settings['APPLICATION_EXTENSION_API_ONLY'] = 'NO'
+        end
+      end
+    end`,
+        anchor: `  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      :ccache_enabled => podfile_properties['apple.ccacheEnabled'] == 'true',
+    )
+  end`,
+        offset: 1,
+        comment: '#',
+    });
 
-  const withAppExtFixPt2 = mergeContents({
-    tag: 'fix2',
-    src: withAppExtFix.contents,
-    newSrc: ` installer.pods_project.targets.each do |target|
+    const withAppExtFixPt2 = mergeContents({
+        tag: 'fix2',
+        src: withAppExtFix.contents,
+        newSrc: `    installer.pods_project.targets.each do |target|
         target.build_configurations.each do |config|
           config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
-          config.build_settings['APPLICATION_EXTENSION_API_ONLY'] = '${AppExtValue}'        
+          config.build_settings['APPLICATION_EXTENSION_API_ONLY'] = 'NO'
         end
       end`,
-    anchor: /post_install do \|installer\|/,
-    offset: 1,
-    comment: "#",
-  })
+        anchor: /post_install do \|installer\|/,
+        offset: 1,
+        comment: '#',
+    });
 
-  const withPodInstall = mergeContents({
-    tag: 'expo-widgets',
-    src: withAppExtFixPt2.contents,
-    newSrc: podInstaller,
-    anchor: /target /,
-    offset: 0,
-    comment: "#",
-  })
+    const withPodInstall = mergeContents({
+        tag: 'expo-widgets',
+        src: withAppExtFixPt2.contents,
+        newSrc: podInstaller,
+        anchor: /target /,
+        offset: 0,
+        comment: '#',
+    });
 
-  Logging.logger.debug('Updating podfile')
+    Logging.logger.debug('Updating podfile');
 
-  fs.writeFileSync(podFilePath, withPodInstall.contents);
+    fs.writeFileSync(podFilePath, withPodInstall.contents);
 
-  return config;
-}
+    return config;
+};
